@@ -48,7 +48,7 @@ The fast tier is where degradation lives (same A/B): Haiku fabricated facts and 
 
 When unsure, tier up, but only if the task feeds a load-bearing decision. A cheap wrong answer that corrupts a downstream gate is the expensive outcome; a cheap right answer on legwork is free money.
 
-The driver is the real cost; don't starve it. Author's audits, two builds, July 2026: on one build the main loop was 78% of spend and about 62% of that was cache reads; on the other the main loop was roughly 90% of the burn against the fleet's 10%, and 70% of the driver's file reads (336 of 480) were reference files it never edited. The quality-safe lever is offloading reference material to subagents that read and return conclusions. Shrinking the driver's context mid-task forces compaction and degrades quality faster than it saves cost.
+Where the cost sits depends on the work's shape. Author's re-measurement (2026-08-14, 36 fleet-bearing sessions across three corpora): attended builds run roughly 70/30 driver-heavy, unattended overnight fleet runs invert to about 33/67, and roughly two-thirds of driver cost on builds is cache reads from carrying a big context. The quality-safe lever is offloading reference material to subagents that read and return conclusions; don't starve the driver by shrinking its context mid-task, which forces compaction and degrades quality faster than it saves cost.
 
 ## 4. Effort: the dial inside the model
 
