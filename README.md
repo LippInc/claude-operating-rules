@@ -1,0 +1,78 @@
+# Operating rules for running Claude Code at scale. Measured, not vibed.
+
+These are the operating rules I load into every Claude Code session. They exist because of a number I didn't expect: on the build where I finally added up the tokens, the whole subagent fleet came to about 10% of the burn. The interactive main loop was the other 90%.
+
+The advice I'd read mostly optimized the fleet. My own numbers said the fleet was cheap and the driver, the main loop itself, was the expensive part, so I started writing rules down and kept the ones that survived real work. About two months of heavy daily fleet use went into these (June through August 2026), measured as I went. I wrote the rules and I ran the measurements, n is 1 or 2 everywhere, and it all comes from one machine on one plan, so by the claim-flagging rule this skill itself ships (SKILL.md, section 6), every number here is what the skill would call SINGLE-SOURCE: one source, me. Re-measure on your own setup before trusting any of it.
+
+What's here: [SKILL.md](SKILL.md) is the rulebook, installable as a Claude Code skill. This README is the writeup of the measurements behind it, plus a log of the rules failing, including my own routing rule failing three times in three different ways. It's not a framework or an agent pack, and nothing here executes.
+
+## The driver, not the fleet, was the cost
+
+I audited two builds in July 2026. On the first, the main loop was 78% of spend, and about 62% of that was cache reads, the price of carrying a big context and re-reading it every turn. On the second the split was starker: the main loop took roughly 90% of the burn and the entire fleet about 10%. Also from that second build: 70% of the driver's file reads (336 of 480) were reference files it never edited. One file got re-read 15 times.
+
+That inverted how I work. The cheap win isn't tiering your subagents harder, it's getting reference reading out of the driver: hand the corpus to a subagent that reads it and returns conclusions, so the driver never carries it. The lever I deliberately don't pull is shrinking the driver's context mid-task to save money. Forced compaction mid-build degrades output quality faster than it saves cost, and quality is why you run a big model in the first place.
+
+## Sonnet tied Opus on legwork at 40% of the cost (n=1)
+
+Blind A/B, July 2026. Same tasks, same effort level on both sides, outputs stripped of model names, graded against a rubric written before I saw any output. On my task shapes (research fan-outs, structured extraction, adversarial fact-checking) Sonnet tied or beat Opus. That's a single run per model per shape, so treat it as a hypothesis with receipts rather than a result.
+
+It's been my enforced default since: legwork runs on Sonnet, and picking Opus for legwork needs a stated reason. The boundary that survived use is who sets the frame. If the spec or rubric is already decided and the agent executes inside it, Sonnet. If the agent has to set the frame itself (design, trade-offs, adjudication), or a quiet error would poison a decision downstream, Opus.
+
+## Raising Haiku's effort made its fabrications more convincing
+
+Same A/B: Haiku fabricated facts and product names, and at high effort it fabricated more convincingly, complete with invented sources, quotes nobody wrote, and false "VERIFIED" labels. It got one same-day retest. Same direction both times. (One caveat: effort requests at unsupported levels downgrade silently rather than erroring, so check what level a run actually got before blaming it. The fabrication itself is not in doubt.)
+
+Haiku keeps a narrow slot in my rules: trivially simple lookups where nothing downstream trusts its facts. And "raise the effort to rescue a cheap model" is banned outright. On this evidence it buys you better-decorated fabrications.
+
+## The rules
+
+The full rulebook is [SKILL.md](SKILL.md). In one screen:
+
+| # | Rule | Gist |
+|---|---|---|
+| 1 | Substrate | Fleets run on the Workflow tool with model and effort set explicitly on every `agent()` call. An ad-hoc Agent-tool call can't set effort, so it inherits the session's, which is max exactly when you're working hard. Standing custom agents can pin both in frontmatter. |
+| 2 | Concurrency | Find your throughput ceiling once, then hold it yourself (mine is 8). Idle concurrency is fine; a throttled fleet is not. Big fan-outs get one agent told to refute the frame itself, because scale explores a frame and never breaks one. |
+| 3 | Model tiering | Cheapest model that can't be wrong: trivial lookups on the fast tier, legwork and in-frame execution on the mid tier (the default), frame-setting judgment on the top tier, project-deciding calls on the reserve. |
+| 4 | Effort | A second dial inside the model. Set it per agent, never let it inherit, never raise a cheap tier's effort to rescue quality, and know that unsupported levels downgrade silently. |
+| 5 | Reserve tier | Strongest model at top effort, for exactly two cases: calls that decide the project, and orchestrators whose plan multiplies across everyone they spawn. If everything is critical, nothing is. |
+| 6 | Doctrine | Every agent prompt carries single-writer (subagents research and verify, only the orchestrator writes), honesty over scaffolding ("nothing to fix" is a valid finding), fresh-over-cached facts, and an evidence flag on every load-bearing claim. |
+| 7 | Spawn checklist | Six questions before any agent spawns, plus a lane declaration: if any work is meant for a different lane or tier than the script's default, say so in one line before spawning. |
+| 8 | Deadline work | On "work until X" mandates the duration is the deliverable. Agents have no clock. Check it explicitly, say the absolute deadline back, and treat an empty queue as a milestone, not a stop. |
+
+## Run the measurements yourself
+
+My numbers will rot (see Limits). The methods won't.
+
+Blind same-effort A/B. Pick a few task shapes from your real work, not benchmarks. Run each on both models at the same effort level, otherwise you're measuring effort. Strip model identifiers, shuffle, grade against a rubric you wrote beforehand. Write your n down and let it be small. One limitation to copy better than I did: I never separately confirmed the delivered effort level on each run, and levels downgrade silently, so check yours.
+
+Cost audit. Session transcripts are JSONL under `~/.claude/projects/<project>/`; the main session logs to one file and each subagent to its own sidecar file, which is what makes the driver-versus-fleet split possible. Two things silently corrupted my first attempt: compaction re-logs history, so the same message.id recurs and naive token sums came out about 4x too high (dedup by id); and nothing meaningful shows up until you split driver vs. subagents and cache reads vs. output. The percentages I quote are cost-weighted (tokens times each model's price, with cache reads at their own rate), not raw token shares; the 62% is a share of cost.
+
+Instrument validation. Before trusting any grader, gate, or analysis script, feed it a known-bad input and require a failure. No demonstrated red means the instrument is unproven, whatever its greens say. A perfect score on a non-trivial corpus is a smell, not a comfort.
+
+Concurrency ceiling. Raise parallelism until you actually see 429s and backoff, then hold below that with margin; expect it to surface as agents stalling and retrying rather than a clean error in front of you. Mine landed at 8; yours depends on plan and workload. Don't confuse this ceiling with the platform's spawn guards (20 concurrent Agent-tool subagents by default per the docs as of Aug 2026; Workflow runs cap at 16, fewer on weak CPUs), which stop spawns but say nothing about throttling. Your plan's rolling token budget is a third thing again, and you can exhaust that just fine at concurrency 1.
+
+## Where the rules failed
+
+This is the section I wanted to find in other people's rules and mostly didn't.
+
+The routing rule failed three times, differently each time. I keep a rule that routes cheap grind work to a cheaper lane (mine is an off-quota third-party lane, but the same failure hits any tier split, including a plain Haiku/Sonnet/Opus one). First failure: the rule was loaded and I still didn't route anything to it under deadline pressure. The diagnosis wasn't forgetting, it was reluctance. Nobody rips out a working setup mid-race, so the fix was making the cheap lane part of normal work instead of an emergency measure. Second failure: the rule now fired at session start and still produced zero delegations, because the routing was being re-derived from scratch for every fleet, at the worst possible moment. Fix: pre-decide the routing in a template. Third failure, the interesting one: the lane decision was made correctly in prose at plan time, and then the fleet got written as a Workflow script whose model enum had no option for the planned lane. The band silently became the default model, and about 66% of that fleet's token flow went down the wrong lane after the right decision had already been made. A prose decision that isn't representable in the API you execute through doesn't exist. The surviving fix is in the skill now: declare the lane split in one line before anything spawns.
+
+The cheap lane's concurrency rule started wrong in the other direction. Its first version said "max 2", copied from reports that turned out to measure a different regime (one client's internal parallelism, not independent processes). Measured properly, 4 parallel calls cost 1.43x one call's latency, and that ceiling moved to 4-6. Different rule from the 8 above, same lesson: check what regime a borrowed number was measured in before adopting it.
+
+And my own instruments have committed the exact defect they were built to catch. Verification gates passed degenerate inputs (a 3-character answer sailed through a "40 words or less" check; count-valid bullet lists shipped ending mid-thought) until feeding every gate a known-bad first became the rule. It's now the first thing I check, including on this repo's own claims. That's where the SINGLE-SOURCE label in the intro comes from.
+
+## Limits
+
+One person, one Windows machine, one plan tier, one working style. n=1 per cell on the model A/B (the Haiku result got one retest), two builds behind the cost split. Everything is dated July and August 2026, and model names churn, so read the tiers by role (fast, mid, top, reserve) and treat the current names as examples. The Workflow tool's per-call model and effort options, and its `parallel()` primitive, exist in my install (I've run all of them on v2.1.226) but aren't in the public docs as of this writing; the docs even point at an SDK reference page that has no Workflow entry yet. Verify in your version. This repo is a snapshot as of 2026-08-13. I'm not shipping feature changes; the one thing I will do is fold replication results into the README. Not affiliated with Anthropic.
+
+## Install
+
+```
+git clone https://github.com/lippinc/claude-operating-rules
+```
+
+Copy the folder containing SKILL.md to `~/.claude/skills/claude-operating-rules/`. Just SKILL.md is enough, and the folder name is what identifies the skill (the frontmatter name is cosmetic for personal skills). It loads when the model matches your request against its description, or invoke it directly with `/claude-operating-rules`. If `~/.claude/skills/` didn't exist on your machine before this, restart Claude Code once so it starts watching the new directory. The file also reads fine as plain prose.
+
+## License
+
+MIT, Martin Lipp ([lippinc](https://github.com/lippinc)). If you replicate any measurement here, same result or opposite, an issue with your numbers and your n is the most useful thing you can send.
