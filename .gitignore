@@ -1,6 +1,8 @@
+# Python bytecode from running the example
+__pycache__/
+*.pyc
 
-
-# Claude Code local state (never commit): PreCompact transcript snapshots + lane worktrees
+# Claude Code local state (never commit)
 .claude/checkpoints/
 .claude/worktrees/
-.worktrees/
+.claude/settings.local.json

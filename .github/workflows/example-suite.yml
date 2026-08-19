@@ -8,6 +8,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   run:
     strategy:
@@ -21,8 +24,23 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: suite passes and demonstrates a red
-        run: python examples/example_suite.py
+      - name: suite passes and demonstrates its reds
+        shell: bash
+        run: |
+          set +e
+          out=$(python examples/example_suite.py)
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" -eq 0
+          # Exit 0 is not enough, and neither is a count: a commit that deletes a guard with its known-bad row
+          # and pads the count back would still pass both. Pin the census AND each known-bad by name.
+          echo "$out" | grep -q "3 PASS / 0 FAIL / 5 KNOWN-BAD-RED / 0 KNOWN-BAD-GREEN"
+          for label in "over the limit is rejected" "one word over the limit is rejected" \
+                       "a 3-character answer is not an answer" "an empty answer is not an answer" \
+                       "count-valid but cut off mid-thought"; do
+            echo "$out" | grep -q "^KNOWN-BAD-RED   $label"
+          done
 
       - name: instrument validation - a sabotaged mechanism MUST fail the suite
         shell: bash
@@ -30,8 +48,39 @@ jobs:
           # This is the whole point of the four-token contract: a suite that cannot fail is not evidence.
           # If --break ever exits 0, the suite has stopped testing anything and this job must go red.
           set +e
-          python examples/example_suite.py --break
+          out=$(python examples/example_suite.py --break)
           code=$?
           set -e
+          echo "$out"
           echo "sabotaged run exited with $code (expected 2)"
+          # Exit 2 alone is not enough: a missing file also exits 2 in CPython. Require green ROWS on the tape
+          # (anchored at line start; the census line always contains the text "0 KNOWN-BAD-GREEN").
           test "$code" -eq 2
+          echo "$out" | grep -q "^KNOWN-BAD-GREEN"
+          echo "$out" | grep -q "3 PASS / 0 FAIL / 2 KNOWN-BAD-RED / 3 KNOWN-BAD-GREEN"
+
+      - name: instrument validation - a suite with no known-bads MUST NOT report success
+        shell: bash
+        run: |
+          # Rung 4 of the ladder in MECHANISMS.md: zero demonstrated reds is not a pass. This step proves the
+          # guard in the script is live, instead of trusting that it is.
+          set +e
+          out=$(python examples/example_suite.py --vacuous)
+          code=$?
+          set -e
+          echo "$out"
+          echo "vacuous run exited with $code (expected 3)"
+          test "$code" -eq 3
+          echo "$out" | grep -q "3 PASS / 0 FAIL / 0 KNOWN-BAD-RED / 0 KNOWN-BAD-GREEN"
+
+      - name: instrument validation - an unknown flag MUST refuse to run
+        shell: bash
+        run: |
+          # A typo'd sabotage flag must not quietly run the normal suite and hand you a green.
+          set +e
+          out=$(python examples/example_suite.py --vacuuous 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" -eq 1
+          echo "$out" | grep -q "unknown argument"
