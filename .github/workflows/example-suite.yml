@@ -1,0 +1,37 @@
+name: example suite
+
+# The one claim in this repo that a reader can check by machine: the example suite runs anywhere and it can
+# prove it catches things. Every claim about MY setup stays labelled as mine (see Limits in the README); this
+# job exists so that at least the runnable file is verified somewhere I do not control.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  run:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: suite passes and demonstrates a red
+        run: python examples/example_suite.py
+
+      - name: instrument validation - a sabotaged mechanism MUST fail the suite
+        shell: bash
+        run: |
+          # This is the whole point of the four-token contract: a suite that cannot fail is not evidence.
+          # If --break ever exits 0, the suite has stopped testing anything and this job must go red.
+          set +e
+          python examples/example_suite.py --break
+          code=$?
+          set -e
+          echo "sabotaged run exited with $code (expected 2)"
+          test "$code" -eq 2

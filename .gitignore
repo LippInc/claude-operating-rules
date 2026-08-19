@@ -1,0 +1,6 @@
+
+
+# Claude Code local state (never commit): PreCompact transcript snapshots + lane worktrees
+.claude/checkpoints/
+.claude/worktrees/
+.worktrees/
